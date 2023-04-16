@@ -106,7 +106,7 @@ static ssize_t do_read_log_to_user(struct logger_dev *log,
 
 /*
  * Empty out the logger device; must be called with the device
- * semaphore held.
+ * lock held.
  */
 int logger_trim(struct logger_dev *dev)
 {
@@ -140,16 +140,20 @@ ssize_t logger_write(struct file *filp, const char __user *buf, size_t count, lo
 
     struct logger_entry header;
     ssize_t ret = 0;
+    ssize_t len;
 
     header.pid = current->tgid;
     header.tid = current->pid;
     header.len = min_t(size_t, count, LOGGER_ENTRY_MAX_PAYLOAD);
+    len = header.len;
 
     if (unlikely(!header.len))
         return 0;
+    mutex_lock(&log->lock);
     do_write_log(log, &header, sizeof(struct logger_entry));
 
-    ret = do_write_log_from_user(log, buf, count);
+    ret = do_write_log_from_user(log, buf, len);
+    mutex_unlock(&log->lock);
 
 
     return ret;
@@ -164,9 +168,13 @@ ssize_t logger_read(struct file *file, char __user *buf,
     struct logger_dev *log = file->private_data;
     ssize_t ret;
 
+    mutex_lock(&log->lock);
     ret = (log->w_off == log->r_off);
 
-    if (ret) return 0; // empty
+    if (ret) {
+	mutex_unlock(&log->lock);
+	return 0; // empty
+    }
 
     ret = get_entry_len(log, log->r_off);
     if (count < ret) {
@@ -177,6 +185,7 @@ ssize_t logger_read(struct file *file, char __user *buf,
     ret = do_read_log_to_user(log, buf, ret);
 
 out:
+    mutex_unlock(&log->lock);
     return ret;
 }
 
@@ -273,6 +282,7 @@ int logger_init_module(void)
 	    logger_devices[i].r_off = 0;
 	    logger_devices[i].size = BUF_SIZE;
 	    logger_setup_cdev(&logger_devices[i], i);
+	    mutex_init(&logger_devices[i].lock);
 	}
 
 	return 0; /* succeed */
