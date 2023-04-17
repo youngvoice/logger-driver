@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <stdint.h>
 
 #define LOGGER_ENTRY_MAX_LEN            (4*1024)
 #define LOGGER_ENTRY_MAX_PAYLOAD        \
@@ -46,7 +47,7 @@ int main(int argc, char *argv[])
 	exit(0);
     }
     */
-    int fd1 = open("/dev/my_log", O_RDWR);
+    int fd1 = open("/dev/my_log", O_WRONLY);
     if (fd1 < 0)
     {
 	perror("open failed\n");

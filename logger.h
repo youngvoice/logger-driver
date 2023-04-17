@@ -32,12 +32,19 @@ struct logger_entry {
 struct logger_dev {
     unsigned char * buffer;
     struct cdev cdev;	  /* Char device structure		*/
+    struct mutex lock;  /* mutex protecting buffer */
     size_t w_off;
-    size_t r_off;
+    size_t head;
+    struct list_head readers;
     size_t size;
 
 };
 
+struct logger_reader {
+    struct logger_dev *log;
+    struct list_head list;
+    size_t r_off;
+};
 #define logger_offset(n)        ((n) & (log->size - 1))
 
 

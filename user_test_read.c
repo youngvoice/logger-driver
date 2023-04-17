@@ -47,7 +47,7 @@ int main()
     char s[] = "hello world";
     int s_len = strlen(s);
     struct read_buffer buf;
-    int fd1 = open("/dev/my_log", O_RDWR);
+    int fd1 = open("/dev/my_log", O_RDONLY);
     if (fd1 < 0)
     {
 	perror("open failed\n");
@@ -61,6 +61,7 @@ int main()
 	exit(-1);
     }
     */
+    sleep(5);
 
     ret = read(fd1, buf.buf, LOGGER_ENTRY_MAX_LEN);
     if (ret < 0)

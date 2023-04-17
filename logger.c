@@ -88,18 +88,19 @@ static ssize_t do_write_log_from_user(struct logger_dev *log, const void __user 
  *
  */
 static ssize_t do_read_log_to_user(struct logger_dev *log,
+				    struct logger_reader *reader,
                                     char __user *buf,
                                     size_t count)
 {
     size_t len;
-    len = min(count, log->size - log->r_off);
-    if (copy_to_user(buf, log->buffer + log->r_off, len))
+    len = min(count, log->size - reader->r_off);
+    if (copy_to_user(buf, log->buffer + reader->r_off, len))
         return -EFAULT;
 
     if (count != len)
         if (copy_to_user(buf + len, log->buffer, count - len))
             return -EFAULT;
-    log->r_off = logger_offset(log->r_off + count);
+    reader->r_off = logger_offset(reader->r_off + count);
     return count;
 }
 
@@ -108,11 +109,11 @@ static ssize_t do_read_log_to_user(struct logger_dev *log,
  * Empty out the logger device; must be called with the device
  * lock held.
  */
-int logger_trim(struct logger_dev *dev)
+int logger_trim(struct logger_dev *log)
 {
 
-	kfree(dev->buffer);
-	dev->size = 0;
+	kfree(log->buffer);
+	log->size = 0;
 	return 0;
 }
 
@@ -122,17 +123,78 @@ int logger_trim(struct logger_dev *dev)
 
 int logger_open(struct inode *inode, struct file *filp)
 {
-	struct logger_dev *dev; /* device information */
-
-	dev = container_of(inode->i_cdev, struct logger_dev, cdev);
-	filp->private_data = dev; /* for other methods */
+	struct logger_dev *log; /* device information */
+	log = container_of(inode->i_cdev, struct logger_dev, cdev);
+	if (filp->f_mode & FMODE_READ) {
+	    struct logger_reader *reader;
+	    reader = kmalloc(sizeof(struct logger_reader), GFP_KERNEL);
+	    if (!reader)
+		return -ENOMEM;
+	    reader->log = log;
+	    INIT_LIST_HEAD(&reader->list);
+	    mutex_lock(&log->lock);
+	    reader->r_off = log->head;
+	    list_add_tail(&reader->list, &log->readers);
+	    mutex_unlock(&log->lock);
+	    filp->private_data = reader;
+	}
+	else
+	    filp->private_data = log;
 
 	return 0;          /* success */
 }
 
 int logger_release(struct inode *inode, struct file *filp)
 {
-	return 0;
+    if (filp->f_mode & FMODE_READ) {
+	struct logger_reader *reader = filp->private_data;
+	mutex_lock(&(reader->log->lock));
+	list_del(&reader->list);
+	mutex_unlock(&(reader->log->lock));
+	kfree(reader);
+    }
+
+
+    return 0;
+}
+
+static inline int clock_interval(size_t a, size_t b, size_t c)
+{
+    if (b < a) {
+	if (a < c || b >= c)
+	    return 1;
+    } else {
+	if (a < c && b >= c)
+	    return 1;
+    }
+    return 0;
+}
+// bug ???
+// there is problem ???
+static size_t get_next_entry(struct logger_dev *log, size_t off, size_t len)
+{
+    size_t count = 0;
+    do {
+	size_t nr = get_entry_len(log, off);
+	off = logger_offset(off + nr);
+	count += nr;
+    } while (count < len);
+    return off;
+}
+static void fix_up_readers(struct logger_dev *log, size_t len)
+{
+    size_t old = log->w_off;
+    size_t new = logger_offset(old + len);
+    struct logger_reader *reader;
+    // judge the log->head is in [old, new] space and will be rewrite
+    if (clock_interval(old, new, log->head))
+	// jump to the first valid entry out of space [old, new]
+	log->head = get_next_entry(log, log->head, len);
+
+    // apply same method to reader->r_off
+    list_for_each_entry(reader, &log->readers, list)
+	if (clock_interval(old, new, reader->r_off))
+	    reader->r_off = get_next_entry(log, reader->r_off, len);
 }
 ssize_t logger_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
@@ -150,6 +212,7 @@ ssize_t logger_write(struct file *filp, const char __user *buf, size_t count, lo
     if (unlikely(!header.len))
         return 0;
     mutex_lock(&log->lock);
+    fix_up_readers(log, sizeof(struct logger_entry) + header.len);
     do_write_log(log, &header, sizeof(struct logger_entry));
 
     ret = do_write_log_from_user(log, buf, len);
@@ -165,24 +228,25 @@ ssize_t logger_read(struct file *file, char __user *buf,
                         size_t count, loff_t *pos)
 {
 
-    struct logger_dev *log = file->private_data;
+    struct logger_reader *reader = file->private_data;
+    struct logger_dev *log = reader->log;
     ssize_t ret;
 
     mutex_lock(&log->lock);
-    ret = (log->w_off == log->r_off);
+    ret = (log->w_off == reader->r_off);
 
     if (ret) {
 	mutex_unlock(&log->lock);
 	return 0; // empty
     }
 
-    ret = get_entry_len(log, log->r_off);
+    ret = get_entry_len(log, reader->r_off);
     if (count < ret) {
         ret = -EINVAL;
         goto out;
     }
 
-    ret = do_read_log_to_user(log, buf, ret);
+    ret = do_read_log_to_user(log, reader, buf, ret);
 
 out:
     mutex_unlock(&log->lock);
@@ -278,11 +342,12 @@ int logger_init_module(void)
         /* Initialize each device. */
 	for (i = 0; i < logger_nr_devs; i++) {
 	    logger_devices[i].buffer = kmalloc(BUF_SIZE, GFP_KERNEL);
-	    logger_devices[i].w_off = 0;
-	    logger_devices[i].r_off = 0;
-	    logger_devices[i].size = BUF_SIZE;
 	    logger_setup_cdev(&logger_devices[i], i);
 	    mutex_init(&logger_devices[i].lock);
+	    logger_devices[i].w_off = 0;
+	    logger_devices[i].head = 0;
+	    INIT_LIST_HEAD(&logger_devices[i].readers);
+	    logger_devices[i].size = BUF_SIZE;
 	}
 
 	return 0; /* succeed */
