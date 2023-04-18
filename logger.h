@@ -45,7 +45,7 @@ struct logger_reader {
     struct list_head list;
     size_t r_off;
 };
-#define logger_offset(n)        ((n) & (log->size - 1))
+#define logger_offset(n)        ((n) % log->size)
 
 
 /*
