@@ -217,7 +217,7 @@ ssize_t logger_write(struct file *filp, const char __user *buf, size_t count, lo
 
     ret = do_write_log_from_user(log, buf, len);
     mutex_unlock(&log->lock);
-
+    wake_up_interruptible(&log->wq);
 
     return ret;
 
@@ -232,12 +232,36 @@ ssize_t logger_read(struct file *file, char __user *buf,
     struct logger_dev *log = reader->log;
     ssize_t ret;
 
-    mutex_lock(&log->lock);
-    ret = (log->w_off == reader->r_off);
-
-    if (ret) {
+    // need fixing O_NONBLOCK
+    DEFINE_WAIT(wait);
+    // stage 0
+start:
+    while (1) {
+	prepare_to_wait(&log->wq, &wait, TASK_INTERRUPTIBLE);
+	mutex_lock(&log->lock);
+	ret = (log->w_off == reader->r_off);
 	mutex_unlock(&log->lock);
-	return 0; // empty
+
+	if (!ret)
+	    break;
+
+	if (signal_pending(current)) {
+	    ret = -EINTR;
+	    break;
+	}
+	schedule();
+
+    }
+    finish_wait(&log->wq, &wait);
+    if (ret)
+	return ret;
+
+    // stage 1
+    // ret == 0 continue
+    mutex_lock(&log->lock);
+    if (unlikely(log->w_off == reader->r_off)) {
+	mutex_unlock(&log->lock);
+	goto start;
     }
 
     ret = get_entry_len(log, reader->r_off);
@@ -347,6 +371,7 @@ int logger_init_module(void)
 	    logger_devices[i].w_off = 0;
 	    logger_devices[i].head = 0;
 	    INIT_LIST_HEAD(&logger_devices[i].readers);
+	    init_waitqueue_head(&logger_devices[i].wq);
 	    logger_devices[i].size = BUF_SIZE;
 	}
 

@@ -16,10 +16,10 @@
 #define LOGGER_NR_DEVS 4    /* logger0 through logger3 */
 #endif
 
-#define LOGGER_ENTRY_MAX_LEN            (4*1024)
+#define LOGGER_ENTRY_MAX_LEN            (20)
 #define LOGGER_ENTRY_MAX_PAYLOAD        \
         (LOGGER_ENTRY_MAX_LEN - sizeof(struct logger_entry))
-#define BUF_SIZE (16*1024)
+#define BUF_SIZE (40)
 
 struct logger_entry {
     __u16 len;
@@ -36,6 +36,7 @@ struct logger_dev {
     size_t w_off;
     size_t head;
     struct list_head readers;
+    wait_queue_head_t wq;
     size_t size;
 
 };

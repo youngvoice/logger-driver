@@ -1,34 +1,4 @@
-#include <string.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <stdint.h>
-
-
-#define LOGGER_ENTRY_MAX_LEN            (4*1024)
-#define LOGGER_ENTRY_MAX_PAYLOAD        \
-        (LOGGER_ENTRY_MAX_LEN - sizeof(struct logger_entry))
-
-struct logger_entry {
-    uint16_t len;
-    uint16_t __pad;
-    int32_t pid;
-    int32_t tid;
-    char msg[0];
-};
-
-
-struct read_buffer {
-    union {
-        unsigned char buf[LOGGER_ENTRY_MAX_LEN + 1] __attribute__((aligned(4)));
-        struct logger_entry entry __attribute__((aligned(4)));
-    };
-
-};
-
+#include "log_user.h"
 /*
 int main()
 {
@@ -61,16 +31,16 @@ int main()
 	exit(-1);
     }
     */
-    sleep(5);
 
-    ret = read(fd1, buf.buf, LOGGER_ENTRY_MAX_LEN);
-    if (ret < 0)
-    {
-	perror("read failed\n");
-	exit(-1);
+    while(ret = read(fd1, buf.buf, LOGGER_ENTRY_MAX_LEN)) {
+	if (ret < 0)
+	{
+	    perror("read failed\n");
+	    exit(-1);
+	}
+	printf("[pid] %d read log: len=%d %s\n", getpid(), ret, buf.entry.msg);
     }
 
-    printf("read log: len=%d %s\n", ret, buf.entry.msg);
     close(fd1);
     return 0;
 }
