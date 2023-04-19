@@ -1,24 +1,4 @@
-#include <string.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <stdint.h>
-
-#define LOGGER_ENTRY_MAX_LEN            (4*1024)
-#define LOGGER_ENTRY_MAX_PAYLOAD        \
-        (LOGGER_ENTRY_MAX_LEN - sizeof(struct logger_entry))
-
-struct logger_entry {
-    uint16_t len;
-    uint16_t __pad;
-    int32_t pid;
-    int32_t tid;
-    char msg[0];
-};
-
+#include "log_user.h"
 /*
 int main()
 {
